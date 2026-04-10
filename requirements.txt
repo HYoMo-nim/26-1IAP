@@ -1,4 +1,4 @@
-# 필요한 패키지 나중에 추가(임의)
+# 메인 돌아가는지 확인하기 위한(임의)
 fastapi
 uvicorn[standard]
 pydantic
