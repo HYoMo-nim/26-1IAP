@@ -1,6 +1,6 @@
 파일명: Jetson_Model_Comparison.ipynb
 
-- 모델: Yolov8n-pose, Yolov8s-pose, Movenet
+- 모델: Yolov8n-pose, Yolov8s-pose, Movenet, Yolov26n-pose
 - Yolov8 모델 중에서 n이 nano, s가 small
 - 벤치마크 코드
 
@@ -11,6 +11,11 @@
 - 사전 학습된 pose 모델.
 - Multi-person 탐지에 유리
 - 탐지(detect), 분할(Segment), 자세(Pose) 모델은 COCO 데이터셋에서 사전학습되었고, 분류(Classify) 모델은 Imagenet 데이터셋에서 사전학습되었음.
+
+#YOLO26n model
+- 사전 학습 데이터셋.
+- 최신 아키텍처 기반의 pose 모델.
+- 실시간 Multi-person 탐지 최적화.
 
 
 ![alt text](image.png)
@@ -100,6 +105,16 @@
 ⇒ 해당 이미지는 multi-person 상황으로, 탐지 결과가 공정하지 못함. 하지만 현재 프로젝트 주제는 독거노인과 같은 single-person 상황이기 때문에,
 single-person 상황일때의 정확도를 우선순위하기 때문에 YOLOv8 모델로 고려.
 
+
+#YOLOv8n과 YOLO26n 실행 결과
+
+<img width="1470" height="923" alt="YOLOv8n" src="https://github.com/user-attachments/assets/36c785e4-b9ce-4a5d-a474-249ac977a025" />
+<img width="1470" height="923" alt="YOLO26n" src="https://github.com/user-attachments/assets/415f1a35-d766-43bc-be68-1d0f1b2e171a" />
+
+#YOLOv8n과 YOLO26n 성능 분석 결과
+- 정확도: YOLv8n (0.39) < YOLO26n (0.41~0.47)
+- 최고속도: YOLv8n (154 FPS) < YOLO26n (191 FPS)
+- 변환 안정성: 두 모델 다 양호함.
 
 # 결과
 
