@@ -51,12 +51,13 @@ def receive_log(
 # ───────────────────────────────────────────
 # 신규: 2D keypoints 수신
 # ───────────────────────────────────────────
-NUM_KEYPOINTS = 17
-NUM_FRAMES    = 30
+NUM_KEYPOINTS  = 17   # YOLO26n-pose 관절 수
+NUM_FRAMES     = 243  # VideoPose3D receptive field
+KEYPOINT_DIM   = 3    # [x, y, confidence]
 
 class Frame(BaseModel):
     frame_id  : int
-    keypoints : List[List[float]]
+    keypoints : List[List[float]]  # shape: [17, 3] (x, y, confidence)
 
     @field_validator("keypoints")
     @classmethod
@@ -64,14 +65,14 @@ class Frame(BaseModel):
         if len(v) != NUM_KEYPOINTS:
             raise ValueError(f"keypoints는 {NUM_KEYPOINTS}개여야 합니다. 받은 개수: {len(v)}")
         for pt in v:
-            if len(pt) != 2:
-                raise ValueError("각 keypoint는 [x, y] 형식이어야 합니다.")
+            if len(pt) not in [2, 3]:  # [x,y] 또는 [x,y,conf] 둘 다 허용
+                raise ValueError("각 keypoint는 [x, y] 또는 [x, y, confidence] 형식이어야 합니다.")
         return v
 
 class KeypointPayload(BaseModel):
     device_id : str
     timestamp : datetime
-    frames    : List[Frame]
+    frames    : List[Frame]  # 243프레임 묶음
 
     @field_validator("frames")
     @classmethod
@@ -97,7 +98,7 @@ def receive_keypoints(
 
     print(f"[저장완료] device={payload.device_id}, frames={len(payload.frames)}, db_id={db_log.id}")
 
-    # TODO: 3D 변환 모델 연결
+    # TODO: 3D 변환 모델 (VideoPose3D) 연결
     # TODO: 판별 모델 (LSTM) 연결
     # TODO: 이상 징후 감지 시 알림 전송
 
