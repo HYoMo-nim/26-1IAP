@@ -1,7 +1,7 @@
 # AWS EC2 서버에서 실행되는 FastAPI 백엔드.
 # Jetson Nano로부터 이상 탐지 로그 및 2D keypoints 데이터를 HTTPS로 수신하고 DB에 저장한다.
 
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends
 from pydantic import BaseModel, Field, field_validator
 from datetime import datetime
 from typing import List
@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from auth import verify_api_key
 from database import init_db, get_db, DetectionLogDB, KeypointLogDB
+from stgcn_inference import run_inference
 
 app = FastAPI()
 
@@ -49,11 +50,11 @@ def receive_log(
 
 
 # ───────────────────────────────────────────
-# 신규: 2D keypoints 수신
+# 신규: 2D keypoints 수신 + ST-GCN 추론
 # ───────────────────────────────────────────
-NUM_KEYPOINTS  = 17   # YOLO26n-pose 관절 수
-NUM_FRAMES     = 243  # VideoPose3D receptive field
-KEYPOINT_DIM   = 3    # [x, y, confidence]
+NUM_KEYPOINTS = 17   # YOLO26n-pose 관절 수
+NUM_FRAMES    = 243  # VideoPose3D receptive field
+KEYPOINT_DIM  = 3    # [x, y, confidence]
 
 class Frame(BaseModel):
     frame_id  : int
@@ -65,14 +66,14 @@ class Frame(BaseModel):
         if len(v) != NUM_KEYPOINTS:
             raise ValueError(f"keypoints는 {NUM_KEYPOINTS}개여야 합니다. 받은 개수: {len(v)}")
         for pt in v:
-            if len(pt) not in [2, 3]:  # [x,y] 또는 [x,y,conf] 둘 다 허용
+            if len(pt) not in [2, 3]:
                 raise ValueError("각 keypoint는 [x, y] 또는 [x, y, confidence] 형식이어야 합니다.")
         return v
 
 class KeypointPayload(BaseModel):
     device_id : str
     timestamp : datetime
-    frames    : List[Frame]  # 243프레임 묶음
+    frames    : List[Frame]
 
     @field_validator("frames")
     @classmethod
@@ -87,6 +88,7 @@ def receive_keypoints(
     device_id : str = Depends(verify_api_key),
     db        : Session = Depends(get_db)
 ):
+    # DB 저장
     db_log = KeypointLogDB(
         device_id   = payload.device_id,
         timestamp   = payload.timestamp,
@@ -98,16 +100,24 @@ def receive_keypoints(
 
     print(f"[저장완료] device={payload.device_id}, frames={len(payload.frames)}, db_id={db_log.id}")
 
-    # TODO: 3D 변환 모델 (VideoPose3D) 연결
-    # TODO: 판별 모델 (LSTM) 연결
-    # TODO: 이상 징후 감지 시 알림 전송
+    # ST-GCN 추론
+    result = run_inference(payload.frames)
+
+    # 낙상 감지 시 알림 전송
+    if result["is_fall"]:
+        print(f"[경고] 낙상 감지! device={payload.device_id}, confidence={result['fall_confidence']:.3f}")
+        # TODO: 알림 모듈 연결 (팀원 담당)
 
     return {
-        "status"    : "keypoints received",
-        "db_id"     : db_log.id,
-        "device_id" : payload.device_id,
-        "frames"    : len(payload.frames),
-        "timestamp" : payload.timestamp,
+        "status"          : "keypoints received",
+        "db_id"           : db_log.id,
+        "device_id"       : payload.device_id,
+        "frames"          : len(payload.frames),
+        "timestamp"       : payload.timestamp,
+        "is_fall"         : result["is_fall"],
+        "fall_confidence" : result["fall_confidence"],
+        "top_label"       : result["top_label"],
+        "top_confidence"  : result["top_confidence"],
     }
 
 
