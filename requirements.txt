@@ -4,3 +4,9 @@ uvicorn[standard]
 pydantic
 requests
 sqlalchemy
+boto3
+pytest
+httpx
+ultralytics
+opencv-python
+urllib3
