@@ -12,11 +12,9 @@ from sqlalchemy.orm import Session
 
 from auth import verify_api_key
 from database import init_db, get_db, DetectionLogDB, KeypointLogDB
-from stgcn_inference import run_inference
-
 app = FastAPI()
 
-# 서버 시작 시 DB 테이블 자동 생성
+
 init_db()
 
 # ───────────────────────────────────────────
@@ -103,6 +101,18 @@ def send_sms(message: str):
         ) from exc
 
 
+def run_keypoint_inference(frames: List["Frame"]):
+    try:
+        from mmaction_inference import run_inference
+    except ModuleNotFoundError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="서버 환경에 아직 준비되지 않았습니다.",
+        ) from exc
+
+    return run_inference(frames)
+
+
 # ───────────────────────────────────────────
 # 기존: 이상 탐지 로그 수신 + 문자 알림
 # ───────────────────────────────────────────
@@ -180,11 +190,11 @@ def receive_log(
 
 
 # ───────────────────────────────────────────
-# 신규: 2D keypoints 수신 + ST-GCN 추론
+# 신규: 2D keypoints 수신 + MMAction2 추론
 # ───────────────────────────────────────────
-NUM_KEYPOINTS = 17   # YOLO26n-pose 관절 수
-NUM_FRAMES = 243     # VideoPose3D receptive field
-KEYPOINT_DIM = 3     # [x, y, confidence]
+NUM_KEYPOINTS = 17  
+NUM_FRAMES = 243     
+KEYPOINT_DIM = 3    
 
 
 class Frame(BaseModel):
@@ -237,14 +247,25 @@ def receive_keypoints(
     db.commit()
     db.refresh(db_log)
 
+
+    # DB 저장
+    db_log = KeypointLogDB(
+        device_id=payload.device_id,
+        timestamp=payload.timestamp,
+        frame_count=len(payload.frames),
+    )
+    db.add(db_log)
+    db.commit()
+    db.refresh(db_log)
+
     print(
         f"[저장완료] device={payload.device_id}, "
         f"frames={len(payload.frames)}, "
         f"db_id={db_log.id}"
     )
 
-    # ST-GCN 추론
-    result = run_inference(payload.frames)
+    # 판별 모델(MMAction2) 추론
+    result = run_keypoint_inference(payload.frames)
 
     # 낙상 감지 시 알림 전송
     if result["is_fall"]:
@@ -289,5 +310,3 @@ def get_keypoint_logs(
     """저장된 keypoints 수신 로그 전체 조회"""
     logs = db.query(KeypointLogDB).order_by(KeypointLogDB.received_at.desc()).all()
     return {"count": len(logs), "logs": logs}
-
-
