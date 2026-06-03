@@ -1,0 +1,6 @@
+_pycache_/
+.pytest_cache/
+*.pyc
+*.jpg
+*.png
+*.sh

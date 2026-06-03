@@ -1,0 +1,12 @@
+# 메인 돌아가는지 확인하기 위한(임의)
+fastapi
+uvicorn[standard]
+pydantic
+requests
+sqlalchemy
+boto3
+pytest
+httpx
+ultralytics
+opencv-python
+urllib3
