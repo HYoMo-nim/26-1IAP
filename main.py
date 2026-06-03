@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from auth import verify_api_key
 from database import init_db, get_db, DetectionLogDB, KeypointLogDB
 from videopose_inference import run_videopose3d
+
 app = FastAPI()
 
 
@@ -266,10 +267,14 @@ def receive_keypoints(
     )
 
     # 판별 모델(MMAction2) 추론
+<<<<<<< HEAD
     frames_3d=run_videopose3d(payload.frames)
     if frames_3d is None:
         return {"status": "error", "message": "VideoPose3D 변환 실패"}
     result = run_inference(frames_3d)
+=======
+    result = run_keypoint_inference(payload.frames)
+>>>>>>> e7f5a973447d3fdeffc9e84cc33f967b8cd5fc67
 
     # 낙상 감지 시 알림 전송
     if result["is_fall"]:
