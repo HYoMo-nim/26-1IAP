@@ -1,4 +1,4 @@
-# 메인 돌아가는지 확인하기 위한(임의)
+# 백엔드 API
 fastapi
 uvicorn[standard]
 pydantic
@@ -7,6 +7,15 @@ sqlalchemy
 boto3
 pytest
 httpx
-ultralytics
+
+# AI/ML 모델
+torch==2.0.1
+torchvision==0.15.2
+numpy
+
+# 영상 처리
 opencv-python
+ultralytics
+
+# 유틸
 urllib3

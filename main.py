@@ -3,7 +3,8 @@
 import os
 from datetime import datetime, timedelta, timezone
 from typing import List
-
+from dotenv import load_dotenv
+import numpy as np
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import FastAPI, Depends, HTTPException
@@ -13,7 +14,8 @@ from sqlalchemy.orm import Session
 from auth import verify_api_key
 from database import init_db, get_db, DetectionLogDB, KeypointLogDB
 from videopose_inference import run_videopose3d
-
+from ctrgcn_inference import run_inference as run_ctrgcn_inference
+load_dotenv()
 app = FastAPI()
 
 
@@ -249,53 +251,123 @@ def receive_keypoints(
     db.commit()
     db.refresh(db_log)
 
-
-    # DB 저장
-    db_log = KeypointLogDB(
-        device_id=payload.device_id,
-        timestamp=payload.timestamp,
-        frame_count=len(payload.frames),
-    )
-    db.add(db_log)
-    db.commit()
-    db.refresh(db_log)
-
     print(
         f"[저장완료] device={payload.device_id}, "
         f"frames={len(payload.frames)}, "
         f"db_id={db_log.id}"
     )
 
-    # 판별 모델(MMAction2) 추론
-<<<<<<< HEAD
-    frames_3d=run_videopose3d(payload.frames)
-    if frames_3d is None:
-        return {"status": "error", "message": "VideoPose3D 변환 실패"}
-    result = run_inference(frames_3d)
-=======
-    result = run_keypoint_inference(payload.frames)
->>>>>>> e7f5a973447d3fdeffc9e84cc33f967b8cd5fc67
-
-    # 낙상 감지 시 알림 전송
-    if result["is_fall"]:
-        print(
-            f"[경고] 낙상 감지! "
-            f"device={payload.device_id}, "
-            f"confidence={result['fall_confidence']:.3f}"
-        )
-        # TODO: 알림 모듈 연결 (팀원 담당)
-
-    return {
-        "status": "keypoints received",
-        "db_id": db_log.id,
-        "device_id": payload.device_id,
-        "frames": len(payload.frames),
-        "timestamp": payload.timestamp,
-        "is_fall": result["is_fall"],
-        "fall_confidence": result["fall_confidence"],
-        "top_label": result["top_label"],
-        "top_confidence": result["top_confidence"],
-    }
+    # ───────────────────────────────────────────
+    # 파이프라인: 2D keypoints → 3D 변환 → 낙상 판별
+    # ───────────────────────────────────────────
+    
+    try:
+        # Step 1: 2D keypoints 추출
+        frames_2d = []
+        for frame in payload.frames:
+            keypoints_2d = [[kp[0], kp[1]] for kp in frame.keypoints]  # [x, y]만 추출
+            frames_2d.append(keypoints_2d)
+        
+        frames_2d_array = np.array(frames_2d, dtype=np.float32)
+        print(f"[Step 1] 2D keypoints 추출: {frames_2d_array.shape}")
+        
+        # Step 2: VideoPose3D: 2D → 3D 변환
+        print(f"[Step 2] VideoPose3D 변환 시작...")
+        frames_3d = run_videopose3d(frames_2d_array)
+        
+        if frames_3d is None:
+            print(f"[오류] VideoPose3D 변환 실패")
+            return {
+                "status": "error",
+                "message": "VideoPose3D 변환 실패",
+                "db_id": db_log.id
+            }
+        
+        # numpy 배열로 변환
+        if isinstance(frames_3d, list):
+            frames_3d = np.array(frames_3d, dtype=np.float32)
+        
+        print(f"[Step 2] VideoPose3D 변환 완료: {frames_3d.shape}")
+        
+        # Step 3: CTR-GCN: 3D keypoints로 낙상 판별
+        print(f"[Step 3] CTR-GCN 판별 시작...")
+        inference_result = run_ctrgcn_inference(frames_3d)
+        
+        print(f"[Step 3] CTR-GCN 판별 완료")
+        print(f"         is_fall: {inference_result['is_fall']}")
+        print(f"         confidence: {inference_result.get('confidence', inference_result.get('fall_confidence', 0)):.3f}")
+        
+        # Step 4: 결과 분석 및 알림
+        is_fall = inference_result.get("is_fall", False)
+        confidence = inference_result.get("confidence", inference_result.get("fall_confidence", 0))
+        top_label = inference_result.get("top_label", "unknown")
+        top_confidence = inference_result.get("top_confidence", 0)
+        
+        # 낙상 감지 시 알림 전송
+        alert_sent = False
+        alert_reason = ""
+        
+        if is_fall and confidence >= CONFIDENCE_THRESHOLD:
+            print(f"[경고] 낙상 감지!")
+            print(f"       device={payload.device_id}")
+            print(f"       confidence={confidence:.3f}")
+            print(f"       top_label={top_label}")
+            
+            # SMS 알림 발송
+            sms_message = (
+                f"[낙상 감지 알림]\n"
+                f"장치: {payload.device_id}\n"
+                f"신뢰도: {confidence:.1%}\n"
+                f"시각: {payload.timestamp.strftime('%Y-%m-%d %H:%M:%S')}"
+            )
+            
+            try:
+                sms_message_id = send_sms(sms_message)
+                if sms_message_id and sms_message_id != "sms-disabled":
+                    alert_sent = True
+                    alert_reason = "SMS sent"
+                    print(f"[성공] SMS 전송됨: {sms_message_id}")
+            except Exception as e:
+                alert_reason = f"SMS 전송 실패: {str(e)}"
+                print(f"[경고] {alert_reason}")
+        
+        # Step 5: 응답 생성
+        response = {
+            "status": "success",
+            "db_id": db_log.id,
+            "device_id": payload.device_id,
+            "frames": len(payload.frames),
+            "timestamp": payload.timestamp.isoformat(),
+            "pipeline_result": {
+                "is_fall": is_fall,
+                "confidence": float(confidence),
+                "confidence_level": inference_result.get("confidence_level", "unknown"),
+                "top_label": str(top_label),
+                "top_confidence": float(top_confidence),
+                "model_status": inference_result.get("model_status", "unknown")
+            },
+            "alert": {
+                "sent": alert_sent,
+                "reason": alert_reason
+            }
+        }
+        
+        # 최적화 세부사항 추가 (있으면)
+        if "optimization_details" in inference_result:
+            response["optimization"] = inference_result["optimization_details"]
+        
+        return response
+        
+    except Exception as e:
+        print(f"[치명적 오류] 파이프라인 실패: {e}")
+        import traceback
+        traceback.print_exc()
+        
+        return {
+            "status": "error",
+            "message": f"파이프라인 오류: {str(e)}",
+            "db_id": db_log.id
+        }
 
 
 # ───────────────────────────────────────────
