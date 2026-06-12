@@ -18,7 +18,6 @@ from videopose_inference import run_videopose3d
 
 app = FastAPI()
 
-
 init_db()
 
 # ───────────────────────────────────────────
@@ -26,13 +25,17 @@ init_db()
 # ───────────────────────────────────────────
 ALERT_PHONE_NUMBER = os.getenv("ALERT_PHONE_NUMBER", "")
 AWS_REGION = os.getenv("AWS_REGION", "ap-northeast-2")
+ORIGINATION_IDENTITY = os.getenv("ORIGINATION_IDENTITY", "TESTSMS")
+
 ALERT_ACTIONS = {"fall", "collapse", "unconscious"}
 RISK_THRESHOLD = 7
 CONFIDENCE_THRESHOLD = 0.80
 COOLDOWN_SECONDS = 300
 SMS_ENABLED = os.getenv("SMS_ENABLED", "true").lower() == "true"
 
-sms_client = boto3.client("sns", region_name=AWS_REGION)
+# AWS End User Messaging SMS 클라이언트
+sms_client = boto3.client("pinpoint-sms-voice-v2", region_name=AWS_REGION)
+
 last_alert_sent_at: dict[str, datetime] = {}
 
 
@@ -86,18 +89,21 @@ def send_sms(message: str):
             detail="ALERT_PHONE_NUMBER is not configured.",
         )
 
+    if not ORIGINATION_IDENTITY:
+        raise HTTPException(
+            status_code=500,
+            detail="ORIGINATION_IDENTITY is not configured.",
+        )
+
     try:
-        response = sms_client.publish(
-            PhoneNumber=ALERT_PHONE_NUMBER,
-            Message=message,
-            MessageAttributes={
-                "AWS.SNS.SMS.SMSType": {
-                    "DataType": "String",
-                    "StringValue": "Transactional",
-                }
-            },
+        response = sms_client.send_text_message(
+            DestinationPhoneNumber=ALERT_PHONE_NUMBER,
+            OriginationIdentity=ORIGINATION_IDENTITY,
+            MessageBody=message,
+            MessageType="TRANSACTIONAL",
         )
         return response.get("MessageId")
+
     except (BotoCoreError, ClientError) as exc:
         raise HTTPException(
             status_code=502,
