@@ -9,8 +9,8 @@ pytest
 httpx
 
 # AI/ML 모델
-torch==2.0.1
-torchvision==0.15.2
+torch
+torchvision
 numpy
 
 # 영상 처리

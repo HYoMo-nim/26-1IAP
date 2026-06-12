@@ -23,7 +23,8 @@ def run_videopose3d(frames_2d, model_weights_path="./models/pretrained_h36m_cpn.
         
         # 가중치 파일 입히기
         if os.path.exists(model_weights_path):
-            model.load_state_dict(torch.load(model_weights_path, map_location=torch.device('cpu'), weights_only=True))
+            checkpoint=torch.load(model_weights_path, map_location=torch.device('cpu'), weights_only=True)
+            model.load_state_dict(checkpoint['model_pos'])
         else:
             print(f"[오류] {model_weights_path} 파일이 없습니다!")
             return None
