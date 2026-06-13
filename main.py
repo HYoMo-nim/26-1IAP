@@ -1,10 +1,10 @@
 # AWS EC2 서버에서 실행되는 FastAPI 백엔드.
 # Jetson Nano로부터 이상 탐지 로그 및 2D keypoints 데이터를 HTTPS로 수신하고 DB에 저장한다.
+
 import os
 from datetime import datetime, timedelta, timezone
 from typing import List
-from dotenv import load_dotenv
-import numpy as np
+
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import FastAPI, Depends, HTTPException
@@ -12,27 +12,30 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from auth import verify_api_key
+from ctrgcn_inference import run_inference as run_ctrgcn_inference
 from database import init_db, get_db, DetectionLogDB, KeypointLogDB
 from videopose_inference import run_videopose3d
-from ctrgcn_inference import run_inference as run_ctrgcn_inference
-load_dotenv()
-app = FastAPI()
 
+app = FastAPI()
 
 init_db()
 
 # ───────────────────────────────────────────
-# 문자 알림 설정(확정x)
+# 문자 알림 설정
 # ───────────────────────────────────────────
 ALERT_PHONE_NUMBER = os.getenv("ALERT_PHONE_NUMBER", "")
 AWS_REGION = os.getenv("AWS_REGION", "ap-northeast-2")
+ORIGINATION_IDENTITY = os.getenv("ORIGINATION_IDENTITY", "TESTSMS")
+
 ALERT_ACTIONS = {"fall", "collapse", "unconscious"}
-RISK_THRESHOLD = 7   # 임시 기준값을 7로 설정(0~10)
+RISK_THRESHOLD = 7
 CONFIDENCE_THRESHOLD = 0.80
 COOLDOWN_SECONDS = 300
 SMS_ENABLED = os.getenv("SMS_ENABLED", "true").lower() == "true"
 
-sms_client = boto3.client("sns", region_name=AWS_REGION)
+# AWS End User Messaging SMS 클라이언트
+sms_client = boto3.client("pinpoint-sms-voice-v2", region_name=AWS_REGION)
+
 last_alert_sent_at: dict[str, datetime] = {}
 
 
@@ -86,18 +89,21 @@ def send_sms(message: str):
             detail="ALERT_PHONE_NUMBER is not configured.",
         )
 
+    if not ORIGINATION_IDENTITY:
+        raise HTTPException(
+            status_code=500,
+            detail="ORIGINATION_IDENTITY is not configured.",
+        )
+
     try:
-        response = sms_client.publish(
-            PhoneNumber=ALERT_PHONE_NUMBER,
-            Message=message,
-            MessageAttributes={
-                "AWS.SNS.SMS.SMSType": {
-                    "DataType": "String",
-                    "StringValue": "Transactional",
-                }
-            },
+        response = sms_client.send_text_message(
+            DestinationPhoneNumber=ALERT_PHONE_NUMBER,
+            OriginationIdentity=ORIGINATION_IDENTITY,
+            MessageBody=message,
+            MessageType="TRANSACTIONAL",
         )
         return response.get("MessageId")
+
     except (BotoCoreError, ClientError) as exc:
         raise HTTPException(
             status_code=502,
@@ -105,20 +111,8 @@ def send_sms(message: str):
         ) from exc
 
 
-def run_keypoint_inference(frames: List["Frame"]):
-    try:
-        from mmaction_inference import run_inference
-    except ModuleNotFoundError as exc:
-        raise HTTPException(
-            status_code=503,
-            detail="서버 환경에 아직 준비되지 않았습니다.",
-        ) from exc
-
-    return run_inference(frames)
-
-
 # ───────────────────────────────────────────
-# 기존: 이상 탐지 로그 수신 + 문자 알림
+# 이상 탐지 로그 수신 + 문자 알림
 # ───────────────────────────────────────────
 class DetectionLog(BaseModel):
     device_id: str
@@ -139,12 +133,12 @@ def root():
 def receive_log(
     log: DetectionLog,
     device_id: str = Depends(verify_api_key),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     if log.device_id != device_id:
         raise HTTPException(
             status_code=403,
-            detail="device_id와 API 키가 일치하지 않습니다."
+            detail="device_id와 API 키가 일치하지 않습니다.",
         )
 
     db_log = DetectionLogDB(
@@ -165,14 +159,14 @@ def receive_log(
     )
 
     sms_message_id = None
-    alert_send = False
+    alert_sent = False
 
     if send_now:
         sms_message = build_sms_message(log)
         sms_message_id = send_sms(sms_message)
 
         if sms_message_id and sms_message_id != "sms-disabled":
-            alert_send = True
+            alert_sent = True
             cooldown_key = f"{log.device_id}:{log.action_label.lower()}"
             last_alert_sent_at[cooldown_key] = datetime.now(timezone.utc)
 
@@ -180,30 +174,30 @@ def receive_log(
         f"[저장완료] device={log.device_id}, "
         f"action={log.action_label}, risk_level={log.risk_level}, "
         f"confidence={log.confidence}, loss={log.loss_value}, "
-        f"alert_send={alert_send}, db_id={db_log.id}"
+        f"alert_sent={alert_sent}, db_id={db_log.id}"
     )
 
     return {
         "status": "log received",
         "db_id": db_log.id,
-        "alert_sent": alert_send,
+        "alert_sent": alert_sent,
         "decision_reason": reason,
         "sms_message_id": sms_message_id,
-        "data": log.model_dump()
+        "data": log.model_dump(),
     }
 
 
 # ───────────────────────────────────────────
-# 신규: 2D keypoints 수신 + MMAction2 추론
+# 2D keypoints 수신 + VideoPose3D + CTR-GCN 판별
 # ───────────────────────────────────────────
-NUM_KEYPOINTS = 17  
-NUM_FRAMES = 243     
-KEYPOINT_DIM = 3    
+NUM_KEYPOINTS = 17
+NUM_FRAMES = 243
+KEYPOINT_DIM = 3
 
 
 class Frame(BaseModel):
     frame_id: int
-    keypoints: List[List[float]]  # shape: [17, 3] (x, y, confidence)
+    keypoints: List[List[float]]
 
     @field_validator("keypoints")
     @classmethod
@@ -233,15 +227,14 @@ class KeypointPayload(BaseModel):
 def receive_keypoints(
     payload: KeypointPayload,
     device_id: str = Depends(verify_api_key),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     if payload.device_id != device_id:
         raise HTTPException(
             status_code=403,
-            detail="device_id와 API 키가 일치하지 않습니다."
+            detail="device_id와 API 키가 일치하지 않습니다.",
         )
 
-    # DB 저장
     db_log = KeypointLogDB(
         device_id=payload.device_id,
         timestamp=payload.timestamp,
@@ -378,22 +371,13 @@ def receive_keypoints(
         import traceback
         traceback.print_exc()
         
-        return {
-            "status": "error",
-            "message": f"파이프라인 오류: {str(e)}",
-            "db_id": db_log.id
-        }
-
-
-# ───────────────────────────────────────────
-# DB 조회 엔드포인트 (저장된 로그 확인용)
+# DB 조회 엔드포인트
 # ───────────────────────────────────────────
 @app.get("/logs/detection")
 def get_detection_logs(
     db: Session = Depends(get_db),
-    device_id: str = Depends(verify_api_key)
+    device_id: str = Depends(verify_api_key),
 ):
-    """저장된 이상 탐지 로그 전체 조회"""
     logs = db.query(DetectionLogDB).order_by(DetectionLogDB.received_at.desc()).all()
     return {"count": len(logs), "logs": logs}
 
@@ -401,8 +385,7 @@ def get_detection_logs(
 @app.get("/logs/keypoints")
 def get_keypoint_logs(
     db: Session = Depends(get_db),
-    device_id: str = Depends(verify_api_key)
+    device_id: str = Depends(verify_api_key),
 ):
-    """저장된 keypoints 수신 로그 전체 조회"""
     logs = db.query(KeypointLogDB).order_by(KeypointLogDB.received_at.desc()).all()
     return {"count": len(logs), "logs": logs}
