@@ -308,29 +308,44 @@ def receive_keypoints(
         alert_reason = ""
         
         if is_fall and confidence >= CONFIDENCE_THRESHOLD:
-            print(f"[경고] 낙상 감지!")
-            print(f"       device={payload.device_id}")
-            print(f"       confidence={confidence:.3f}")
-            print(f"       top_label={top_label}")
+            # 1. 현재 시간 및 쿨다운 키 생성
+            now = datetime.now(timezone.utc)
+            cooldown_key = f"{payload.device_id}:fall"
+            last_sent = last_alert_sent_at.get(cooldown_key)
             
-            # SMS 알림 발송
-            sms_message = (
-                f"[낙상 감지 알림]\n"
-                f"장치: {payload.device_id}\n"
-                f"신뢰도: {confidence:.1%}\n"
-                f"시각: {payload.timestamp.strftime('%Y-%m-%d %H:%M:%S')}"
-            )
+            # 2. 쿨다운 적용 중인지 확인 (COOLDOWN_SECONDS는 상단에 300으로 정의되어 있음)
+            if last_sent and (now - last_sent) < timedelta(seconds=COOLDOWN_SECONDS):
+                alert_reason = "cooldown_active"
+                remaining_time = COOLDOWN_SECONDS - (now - last_sent).seconds
+                print(f"[알림 스킵] 쿨다운 적용 중 (남은 시간: {remaining_time}초)")
             
-            try:
-                sms_message_id = send_sms(sms_message)
-                if sms_message_id and sms_message_id != "sms-disabled":
-                    alert_sent = True
-                    alert_reason = "SMS sent"
-                    print(f"[성공] SMS 전송됨: {sms_message_id}")
-            except Exception as e:
-                alert_reason = f"SMS 전송 실패: {str(e)}"
-                print(f"[경고] {alert_reason}")
-        
+            # 3. 쿨다운이 지났거나 처음 발생한 경우 문자 전송
+            else:
+                print(f"[경고] 낙상 감지!")
+                print(f"       device={payload.device_id}")
+                print(f"       confidence={confidence:.3f}")
+                print(f"       top_label={top_label}")
+                
+                # SMS 알림 발송
+                sms_message = (
+                    f"[낙상 감지 알림]\n"
+                    f"장치: {payload.device_id}\n"
+                    f"신뢰도: {confidence:.1%}\n"
+                    f"시각: {payload.timestamp.strftime('%Y-%m-%d %H:%M:%S')}"
+                )
+                
+                try:
+                    sms_message_id = send_sms(sms_message)
+                    if sms_message_id and sms_message_id != "sms-disabled":
+                        alert_sent = True
+                        alert_reason = "SMS sent"
+                        # 4. 문자 전송 성공 시 타이머 갱신
+                        last_alert_sent_at[cooldown_key] = now
+                        print(f"[성공] SMS 전송됨: {sms_message_id}")
+                except Exception as e:
+                    alert_reason = f"SMS 전송 실패: {str(e)}"
+                    print(f"[경고] {alert_reason}")
+
         # Step 5: 응답 생성
         response = {
             "status": "success",
