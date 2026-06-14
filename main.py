@@ -5,6 +5,10 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import List
 
+import numpy as np
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+import numpy as np
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import FastAPI, Depends, HTTPException
@@ -186,6 +190,37 @@ def receive_log(
         "data": log.model_dump(),
     }
 
+def visualize_3d_skeleton(frames_3d, frame_idx=0):
+    """
+    VideoPose3D가 변환한 3D 뼈대(1개 프레임)를 이미지 파일로 저장하여 눈으로 확인합니다.
+    """
+    try:
+        # 특정 프레임의 3D 관절 좌표 추출 (17, 3)
+        skeleton = frames_3d[frame_idx] 
+        
+        fig = plt.figure(figsize=(8, 8))
+        ax = fig.add_subplot(111, projection='3d')
+        
+        # 각 관절을 점으로 찍기
+        xs, ys, zs = skeleton[:, 0], skeleton[:, 1], skeleton[:, 2]
+        ax.scatter(xs, ys, zs, c='r', marker='o')
+        
+        # 관절 번호 텍스트 달기
+        for i, (x, y, z) in enumerate(zip(xs, ys, zs)):
+            ax.text(x, y, z, str(i), fontsize=8, color='blue')
+        
+        ax.set_xlabel('X')
+        ax.set_ylabel('Y')
+        ax.set_zlabel('Z')
+        ax.set_title(f'3D Skeleton (Frame {frame_idx})')
+        
+        # 파일로 저장 (서버 폴더에 skeleton_test.png로 저장됨)
+        plt.savefig('skeleton_test.png')
+        plt.close()
+        print(f"[디버깅] 3D 스켈레톤 시각화 이미지가 skeleton_test.png로 저장되었습니다.")
+        
+    except Exception as e:
+        print(f"[시각화 오류] {e}")
 
 # ───────────────────────────────────────────
 # 2D keypoints 수신 + VideoPose3D + CTR-GCN 판별
@@ -281,7 +316,8 @@ def receive_keypoints(
             frames_3d = np.array(frames_3d, dtype=np.float32)
         
         print(f"[Step 2] VideoPose3D 변환 완료: {frames_3d.shape}")
-        
+        visualize_3d_skeleton(frames_3d, frame_idx=120)
+
         # Step 3: CTR-GCN: 3D keypoints로 낙상 판별
         print(f"[Step 3] CTR-GCN 판별 시작...")
         inference_result = run_ctrgcn_inference(frames_3d)
@@ -289,6 +325,7 @@ def receive_keypoints(
         print(f"[Step 3] CTR-GCN 판별 완료")
         print(f"         is_fall: {inference_result['is_fall']}")
         print(f"         confidence: {inference_result.get('confidence', inference_result.get('fall_confidence', 0)):.3f}")
+        print(f"         [디버그] 1위 예측 행동(Label): {inference_result.get('top_label')} (확률: {inference_result.get('top_confidence'):.3f})")
         
         # Step 4: 결과 분석 및 알림
         is_fall = inference_result.get("is_fall", False)

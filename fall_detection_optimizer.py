@@ -7,8 +7,8 @@ FALL_LABEL_IDX = 42
 # ───────────────────────────────────────────
 # 설정값
 # ───────────────────────────────────────────
-FALL_CONFIDENCE_THRESHOLD = 0.70      # 기준치를 살짝 낮춰서 감지율을 높임 (70%)
-CONFIDENCE_MARGIN = 0.10              # 1위와 2위 행동 간의 최소 격차
+FALL_CONFIDENCE_THRESHOLD = 0.015      # 기준치를 살짝 낮춰서 감지율을 높임 (70%)
+CONFIDENCE_MARGIN = 0.000              # 1위와 2위 행동 간의 최소 격차
 
 def optimize_fall_detection(scores: np.ndarray, *args, **kwargs):
     """
