@@ -33,7 +33,7 @@ ORIGINATION_IDENTITY = os.getenv("ORIGINATION_IDENTITY", "TESTSMS")
 
 ALERT_ACTIONS = {"fall", "collapse", "unconscious"}
 RISK_THRESHOLD = 7
-CONFIDENCE_THRESHOLD = 0.80
+CONFIDENCE_THRESHOLD = 0.015
 COOLDOWN_SECONDS = 300
 SMS_ENABLED = os.getenv("SMS_ENABLED", "true").lower() == "true"
 
@@ -337,7 +337,7 @@ def receive_keypoints(
         alert_sent = False
         alert_reason = ""
         
-        if is_fall and confidence >= CONFIDENCE_THRESHOLD:
+        if is_fall:
             # 1. 현재 시간 및 쿨다운 키 생성
             now = datetime.now(timezone.utc)
             cooldown_key = f"{payload.device_id}:fall"
